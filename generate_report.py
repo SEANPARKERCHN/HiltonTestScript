@@ -1,4 +1,5 @@
 from ws4py.client.threadedclient import WebSocketClient
+from difflib import SequenceMatcher
 import argparse
 import base64
 import time
@@ -6,6 +7,12 @@ from threading import Thread
 from os import walk
 import json
 import copy
+
+def is_correct(ref, hyp):
+    if SequenceMatcher(None, ref, hyp).ratio() < 0.9:
+        return False
+    else:
+        return True
 
 def read_in_chunks(file_object, chunk_size=1024):
     while True:
@@ -20,8 +27,42 @@ def get_answerkeymap(filename):
     with open(filename, 'rb') as csvfile:
         csv_reader = csv.reader(csvfile, delimiter='\t')
         for r in csv_reader:
-            akmap[r[1]] = r
+            akmap[r[1]] = {
+                "time_stamp":r[0],
+                "audio_file":r[1],
+                "utterance":r[2],
+                "type":r[3],
+                "right_answer":r[4]
+            }
     return akmap
+
+def wer(ref, hyp):
+    r = ref.lower().split()
+    if len(r) is 0:
+        raise ValueError("first argument ref sentence can't be empty")
+    h = hyp.lower().split()
+    # initialisation
+    import numpy
+    d = numpy.zeros((len(r)+1)*(len(h)+1), dtype=numpy.uint8)
+    d = d.reshape((len(r)+1, len(h)+1))
+    for i in range(len(r)+1):
+        for j in range(len(h)+1):
+            if i == 0:
+                d[0][j] = j
+            elif j == 0:
+                d[i][0] = i
+    # computation
+    for i in range(1, len(r)+1):
+        for j in range(1, len(h)+1):
+            if r[i-1] == h[j-1]:
+                d[i][j] = d[i-1][j-1]
+            else:
+                substitution = d[i-1][j-1] + 1
+                insertion    = d[i][j-1] + 1
+                deletion     = d[i-1][j] + 1
+                d[i][j] = min(substitution, insertion, deletion)
+    
+    return d[len(r)][len(h)]/(len(r)*1.0)
 
 class DummyClient(WebSocketClient):
     result = {}
@@ -65,10 +106,13 @@ class DummyClient(WebSocketClient):
                         self.result['actual_res'] += " "+(item['text'])
                     if item['item_type'] == 'intent':
                         self.result["NLC_class1"]=item['text']
-                        self.result["NLC_class1_conf"]=item['confidence']
+                        self.result["NLC_class1_conf"]=float("{:6.3f}".format(item['confidence']))
                         self.result["NLC_class2"]=reply['responses'][i+1]['text']
-                        self.result["NLC_class2_conf"]=reply['responses'][i+1]['confidence']
+                        self.result["NLC_class2_conf"]=float("{:6.3f}".format(reply['responses'][i+1]['confidence']))
                         break
+                ak = answerkeymap[self.result["filename"]]
+                self.result['wer'] = float("{:6.3f}".format(wer(ak['utterance'],self.result["stt_trans"])))
+                self.result['response_is_correct'] = is_correct(ak["right_answer"],self.result["actual_res"])
                 results.append(copy.deepcopy(self.result))
                 self.result = {}
                 self.close(reason="received expected responses")
@@ -111,9 +155,8 @@ if __name__ == '__main__':
     username = "apiuser"
     password = "r0b0tsrul3"
     base64string = base64.encodestring('%s:%s' % (username, password)).replace('\n', '')
-        
-    results = []
     global results
+    results = []
 
     answerkeymap = get_answerkeymap(options.answerkey)
 
@@ -139,27 +182,29 @@ if __name__ == '__main__':
                 print e
     import codecs
     print "Generating report"
-    fields = ["stt_trans","stt_conf","actual_res","NLC_class1","NLC_class1_conf","NLC_class2","NLC_class2_conf"]
+    fields = ["time_stamp","audio_file","type","utterance",
+              "stt_trans","stt_conf",'wer',
+              "right_answer","actual_res",'response_is_correct',
+              "NLC_class1","NLC_class1_conf","NLC_class2","NLC_class2_conf"]
+    
     with codecs.open('report.csv','w',encoding='utf-8') as f:
         # header 
-        for col in answerkeymap["Audio File"]:
+        for col in fields[:-1]:
             f.write("{}\t".format(col))
-        for col in fields:
-            f.write("{}\t".format(col))
-        f.write("\n")
+        f.write("{}\n".format(fields[-1]))
         # row
         for r in results:
             print r
             row = ''
             try:
-                for col in answerkeymap[r["filename"]]:
-                    row += "{}\t".format(col)
-                for col in fields:
-                    row += "{}\t".format(r[col])
-                row += "\n"
+                ak = answerkeymap[r["filename"]]
+                ak.update(r)
+                for k in fields[:-1]:
+                    row += "{}\t".format(ak[k])
+                row += "{}\n".format(ak[fields[-1]])
                 f.write(row.encode('utf-8'))
             except KeyError as e:
-                print "Can't find the answerkey for the following file"
+                print "KeyError exception or no answerKey is found for certain file"
                 print e
                 continue
             except Exception as e:
