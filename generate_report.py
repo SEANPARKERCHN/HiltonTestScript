@@ -131,7 +131,7 @@ if __name__ == '__main__':
     parser.add_option("-d", "--dir", dest="directory",
                           help="directory where all the audio files are stored")
     parser.add_option("-s", "--server", dest="server",
-                          help="server url to connect to ex: sjr-robot-app.mybluemix.net")
+                          help="server url to connect to ex: hilton-robot-app.mybluemix.net")
     parser.add_option("-a", "--answerkey", dest="answerkey",
                           help="answerkey from SME for evaluation in csv file, tab separated")
     (options, args) = parser.parse_args()
