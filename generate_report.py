@@ -7,7 +7,7 @@ from threading import Thread
 from os import walk
 import json
 import copy
-
+# changed
 def is_correct(ref, hyp):
     if SequenceMatcher(None, ref, hyp).ratio() < 0.9:
         return False
